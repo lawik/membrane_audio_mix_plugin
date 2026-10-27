@@ -197,8 +197,13 @@ UNIFEX_TERM mix(UnifexEnv *env, UnifexPayload **buffers,
   uint32_t output_size = output_length * state->sample_size;
   unifex_payload_alloc(env, UNIFEX_PAYLOAD_BINARY, output_size, &out_payload);
 
-  chunk_and_scale_to_samples(values, values_length, out_payload.data,
-                             &output_length, state);
+  if (values_length > 0) {
+    chunk_and_scale_to_samples(values, values_length, out_payload.data,
+                               &output_length, state);
+  } else {
+    // nothing to mix, keep the queue and emit nothing
+    output_length = 0;
+  }
   unifex_free(values);
   if (output_length < initial_output_length) {
     unifex_payload_realloc(&out_payload, output_length * state->sample_size);
