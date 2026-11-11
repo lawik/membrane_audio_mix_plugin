@@ -20,6 +20,11 @@ defmodule Membrane.AudioMixer.ClipPreventingAdder do
   alias Membrane.AudioMixer.Helpers
   alias Membrane.RawAudio
 
+  # Longest run of same-sign values kept back while waiting for a sign change.
+  # Beyond it the run is emitted as it is, so the queue stays bounded for
+  # silence or any other constant-sign input.
+  @max_queue_length 1_048_576
+
   @enforce_keys [:stream_format, :sample_size]
   defstruct @enforce_keys ++ [is_wave_positive: true, queue: []]
 
@@ -71,8 +76,14 @@ defmodule Membrane.AudioMixer.ClipPreventingAdder do
         add_values(rest, is_last_wave, state, buffer)
       end
     else
-      state = %{state | queue: state.queue ++ values}
-      {buffer, state}
+      queue = state.queue ++ values
+
+      if length(queue) > @max_queue_length do
+        buffer = [buffer | get_iodata([], %{state | queue: queue})] |> IO.iodata_to_binary()
+        {buffer, %{state | queue: []}}
+      else
+        {buffer, %{state | queue: queue}}
+      end
     end
   end
 

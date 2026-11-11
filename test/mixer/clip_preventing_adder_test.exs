@@ -279,4 +279,20 @@ defmodule Membrane.AudioMixer.ClipPreventingAdderTest do
       test_flush_for_several_stream_format([100, 80, 50, 20], [100, 80, 50, 20])
     end
   end
+
+  test "a long run of same-sign samples is emitted instead of queued without bound" do
+    stream_format = %RawAudio{channels: 1, sample_rate: 16_000, sample_format: :s16le}
+    # @max_queue_length in ClipPreventingAdder
+    max_queue_length = 1_048_576
+    run = :binary.copy(<<1, 0>>, max_queue_length)
+
+    state = init(stream_format)
+    # a run that fits the queue is held back until the sign changes
+    assert {<<>>, state} = mix([run], state)
+    # one more sample of the same sign would exceed the bound, so the whole run
+    # goes out as it is
+    assert {output, state} = mix([<<1, 0>>], state)
+    assert output == run <> <<1, 0>>
+    assert {<<>>, %ClipPreventingAdder{queue: []}} = flush(state)
+  end
 end
