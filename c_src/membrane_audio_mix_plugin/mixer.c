@@ -166,14 +166,24 @@ void chunk_and_scale_to_samples(int64_t *values, uint32_t values_length,
 
   state->is_wave_positive = is_wave_positive;
 
-  uint32_t new_queue_length = state->queue_length + end - start;
-  int64_t *new_queue = unifex_alloc(new_queue_length * sizeof(*new_queue));
-  memcpy(new_queue, state->queue, state->queue_length * sizeof(*new_queue));
-  memcpy(new_queue + state->queue_length, values + start,
-         (end - start) * sizeof(*new_queue));
-  state->queue_length = new_queue_length;
-  unifex_free(state->queue);
-  state->queue = new_queue;
+  uint32_t remaining = end - start;
+  if (remaining > MAX_QUEUE_LENGTH - state->queue_length) {
+    // The run of same-sign values (silence, a DC offset) is too long to keep
+    // waiting for a sign change: emit it as it is instead of letting the queue
+    // grow without bound.
+    uint32_t queue_length = state->queue_length;
+    scale_to_samples(samples + samples_size, values + start, remaining, state);
+    samples_size += (remaining + queue_length) * state->sample_size;
+  } else {
+    uint32_t new_queue_length = state->queue_length + remaining;
+    int64_t *new_queue = unifex_alloc(new_queue_length * sizeof(*new_queue));
+    memcpy(new_queue, state->queue, state->queue_length * sizeof(*new_queue));
+    memcpy(new_queue + state->queue_length, values + start,
+           remaining * sizeof(*new_queue));
+    state->queue_length = new_queue_length;
+    unifex_free(state->queue);
+    state->queue = new_queue;
+  }
 
   *samples_length = samples_size / state->sample_size;
 }
@@ -194,15 +204,28 @@ UNIFEX_TERM mix(UnifexEnv *env, UnifexPayload **buffers,
       }
     }
     values_length = min_size / state->sample_size;
-    values = unifex_alloc(values_length * sizeof(*values));
+    values = unifex_alloc((size_t)values_length * sizeof(*values));
+    if (!values) {
+      return unifex_raise(env, "Failed to allocate mixer values");
+    }
     get_values(buffers, buffers_length, values, values_length, state);
   }
 
-  uint32_t initial_output_length = values_length + state->queue_length;
-  uint32_t output_length = initial_output_length;
+  // Computed in size_t: the output holds the queue as well as the new values
+  // and its byte size has to fit the uint32 that payloads are sized with.
+  size_t initial_output_length = (size_t)values_length + state->queue_length;
+  size_t output_size = initial_output_length * state->sample_size;
+  if (output_size > UINT32_MAX) {
+    unifex_free(values);
+    return unifex_raise(env, "Mixer output too large");
+  }
+  uint32_t output_length = (uint32_t)initial_output_length;
   UnifexPayload out_payload;
-  uint32_t output_size = output_length * state->sample_size;
-  unifex_payload_alloc(env, UNIFEX_PAYLOAD_BINARY, output_size, &out_payload);
+  if (!unifex_payload_alloc(env, UNIFEX_PAYLOAD_BINARY, output_size,
+                            &out_payload)) {
+    unifex_free(values);
+    return unifex_raise(env, "Failed to allocate mixer output");
+  }
 
   chunk_and_scale_to_samples(values, values_length, out_payload.data,
                              &output_length, state);

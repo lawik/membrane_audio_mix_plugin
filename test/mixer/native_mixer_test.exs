@@ -281,4 +281,19 @@ defmodule Membrane.AudioMixer.NativeMixerTest do
     assert {:ok, <<>>, state} = Native.mix([<<>>], state)
     assert {:ok, <<1, 0, 2, 0>>, _state} = Native.flush(state)
   end
+
+  test "a long run of same-sign samples is emitted instead of queued without bound" do
+    assert {:ok, state} = Native.init(1, RawAudio.SampleFormat.serialize(:s16le), 16_000)
+    # MAX_QUEUE_LENGTH in mixer.h
+    max_queue_length = 1_048_576
+    run = :binary.copy(<<1, 0>>, max_queue_length)
+
+    # a run that fits the queue is held back until the sign changes
+    assert {:ok, <<>>, state} = Native.mix([run], state)
+    # one more sample of the same sign would exceed the bound, so the whole run
+    # goes out as it is
+    assert {:ok, output, state} = Native.mix([<<1, 0>>], state)
+    assert output == run <> <<1, 0>>
+    assert {:ok, <<>>, _state} = Native.flush(state)
+  end
 end
